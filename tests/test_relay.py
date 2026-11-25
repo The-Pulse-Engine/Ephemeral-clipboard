@@ -1,14 +1,14 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from typing import Any
 
 import pytest
 import pytest_asyncio
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from eclip.relay import Relay, Room
+from eclip.relay import Relay
 
 
 @pytest_asyncio.fixture
@@ -70,18 +70,73 @@ async def test_non_final_message_goes_both_ways_and_keeps_room(
         assert json.loads(await receiver.recv())["payload"] == "a"
         assert nameplate in relay.rooms
 
+        # Only the sender delivers the secret, so a receiver "payload" keeps the room.
+        await receiver.send(
+            json.dumps({"action": "message", "payload": "x", "payloadType": "payload"})
+        )
+        assert json.loads(await sender.recv())["payload"] == "x"
+        assert nameplate in relay.rooms
+
 
 @pytest.mark.asyncio
 async def test_claim_finds_last_free_nameplate_then_reports_full(
     relay_url: tuple[Relay, str],
 ) -> None:
     relay, url = relay_url
-    placeholder = Room(sender=cast(Any, None))
-    relay.rooms = {f"{n:03d}": placeholder for n in range(1, 1000)}
-    async with websockets.connect(url) as last, websockets.connect(url) as extra:
-        assert await claim(last) == "000"
+    relay.max_rooms = 2
+    async with (
+        websockets.connect(url) as first,
+        websockets.connect(url) as last,
+        websockets.connect(url) as extra,
+    ):
+        assert {await claim(first), await claim(last)} == {"1", "2"}
         assert (await ask(extra, action="claim"))["error"] == "relay full"
         assert (await ask(extra, action="claim"))["error"] == "relay full"
+
+
+@pytest.mark.asyncio
+async def test_expired_room_is_closed_with_error(relay_url: tuple[Relay, str]) -> None:
+    relay, url = relay_url
+    async with websockets.connect(url) as sender:
+        nameplate = await claim(sender)
+        await relay.reap_expired()
+        assert nameplate in relay.rooms
+
+        relay.ttl = 0
+        await relay.reap_expired()
+        assert json.loads(await sender.recv())["error"] == "expired"
+        await sender.wait_closed()
+        assert relay.rooms == {}
+        assert relay.connections == {}
+
+
+@pytest.mark.asyncio
+async def test_connections_per_ip_are_capped(relay_url: tuple[Relay, str]) -> None:
+    relay, url = relay_url
+    relay.max_ip_connections = 2
+    async with websockets.connect(url) as one:
+        async with websockets.connect(url) as two, websockets.connect(url) as three:
+            assert json.loads(await three.recv())["error"] == "too many connections"
+            await three.wait_closed()
+            assert "nameplate" in await ask(two, action="claim")
+        for _ in range(50):
+            if sum(relay.ip_connections.values()) == 1:
+                break
+            await asyncio.sleep(0.01)
+        async with websockets.connect(url) as again:
+            assert "nameplate" in await ask(again, action="claim")
+        assert "nameplate" in await ask(one, action="claim")
+
+
+@pytest.mark.asyncio
+async def test_large_message_is_rejected_and_connection_stays_open(
+    relay_url: tuple[Relay, str],
+) -> None:
+    relay, url = relay_url
+    relay.max_message = 100
+    async with websockets.connect(url) as ws:
+        assert (await ask(ws, action="claim", pad="x" * 100))["error"] == "message too large"
+        assert "nameplate" in await ask(ws, action="claim")
 
 
 @pytest.mark.asyncio
