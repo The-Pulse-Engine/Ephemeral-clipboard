@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
+from . import __version__
 from .relay import serve
 
 
@@ -10,6 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="eclip",
         description="Send a secret from one computer to another.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("send", help="Send the clipboard contents.")
