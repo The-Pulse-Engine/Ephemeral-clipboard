@@ -1,14 +1,14 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from eclip.relay import Relay
+from eclip.relay import Relay, Room
 
 
 @pytest_asyncio.fixture
@@ -50,6 +50,38 @@ async def test_payload_delivered_once_and_room_deleted(relay_url: tuple[Relay, s
 
     async with websockets.connect(url) as second:
         assert (await ask(second, action="join", nameplate=nameplate))["error"] == "room not found"
+
+
+@pytest.mark.asyncio
+async def test_non_final_message_goes_both_ways_and_keeps_room(
+    relay_url: tuple[Relay, str],
+) -> None:
+    relay, url = relay_url
+    async with websockets.connect(url) as sender, websockets.connect(url) as receiver:
+        nameplate = await claim(sender)
+        await ask(receiver, action="join", nameplate=nameplate)
+        await sender.recv()  # receiver-ready
+
+        await receiver.send(
+            json.dumps({"action": "message", "payload": "b", "payloadType": "pake"})
+        )
+        assert json.loads(await sender.recv())["payload"] == "b"
+        await sender.send(json.dumps({"action": "message", "payload": "a", "payloadType": "pake"}))
+        assert json.loads(await receiver.recv())["payload"] == "a"
+        assert nameplate in relay.rooms
+
+
+@pytest.mark.asyncio
+async def test_claim_finds_last_free_nameplate_then_reports_full(
+    relay_url: tuple[Relay, str],
+) -> None:
+    relay, url = relay_url
+    placeholder = Room(sender=cast(Any, None))
+    relay.rooms = {f"{n:03d}": placeholder for n in range(1, 1000)}
+    async with websockets.connect(url) as last, websockets.connect(url) as extra:
+        assert await claim(last) == "000"
+        assert (await ask(extra, action="claim"))["error"] == "relay full"
+        assert (await ask(extra, action="claim"))["error"] == "relay full"
 
 
 @pytest.mark.asyncio
@@ -118,10 +150,13 @@ async def test_sender_disconnect_deletes_room(relay_url: tuple[Relay, str]) -> N
         '{"action": 5}',
         '{"action": "join", "nameplate": [1]}',
         '{"action": "dance"}',
+        b"\x80",
+        "9" * 5000,
+        "[" * 100_000,
     ],
 )
 async def test_bad_input_gets_error_and_connection_stays_open(
-    relay_url: tuple[Relay, str], raw: str
+    relay_url: tuple[Relay, str], raw: str | bytes
 ) -> None:
     _, url = relay_url
     async with websockets.connect(url) as ws:

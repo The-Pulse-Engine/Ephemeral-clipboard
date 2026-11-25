@@ -22,12 +22,9 @@ class Relay:
         self.rooms: dict[str, Room] = {}
         self.connections: dict[ServerConnection, str] = {}
 
-    def _claim_nameplate(self) -> str:
-        for _ in range(1000):
-            nameplate = f"{secrets.randbelow(1000):03d}"
-            if nameplate not in self.rooms:
-                return nameplate
-        raise RuntimeError("No free nameplates")
+    def _claim_nameplate(self) -> str | None:
+        free = [f"{n:03d}" for n in range(1000) if f"{n:03d}" not in self.rooms]
+        return secrets.choice(free) if free else None
 
     async def _close_room(self, nameplate: str) -> None:
         room = self.rooms.pop(nameplate, None)
@@ -51,7 +48,8 @@ class Relay:
             async for raw in websocket:
                 try:
                     message = json.loads(raw)
-                except json.JSONDecodeError:
+                # ValueError covers bad UTF-8 and huge ints, RecursionError deep nesting
+                except (ValueError, RecursionError):
                     await _error(websocket, "invalid json")
                     continue
                 if not isinstance(message, dict):
@@ -70,6 +68,9 @@ class Relay:
 
                 if action == "claim":
                     nameplate = self._claim_nameplate()
+                    if nameplate is None:
+                        await _error(websocket, "relay full")
+                        continue
                     self.rooms[nameplate] = Room(sender=websocket)
                     self.connections[websocket] = nameplate
                     await websocket.send(json.dumps({"type": "claimed", "nameplate": nameplate}))
