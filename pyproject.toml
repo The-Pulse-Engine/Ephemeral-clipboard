@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ephemeral-clipboard"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Send one secret over an encrypted, one-read relay."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,9 @@ dev = [
 
 [project.scripts]
 eclip = "eclip.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "eclip.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
