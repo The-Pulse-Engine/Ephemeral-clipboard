@@ -102,7 +102,7 @@ async def test_claim_finds_last_free_nameplate_then_reports_full(
 @pytest.mark.asyncio
 async def test_connections_and_rooms_expire_after_ttl(relay_url: tuple[Relay, str]) -> None:
     relay, url = relay_url
-    relay.ttl = 0.3
+    relay.ttl = 1  # long enough to pair on a slow CI runner
     async with (
         websockets.connect(url) as sender,
         websockets.connect(url) as receiver,

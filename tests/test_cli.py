@@ -32,5 +32,8 @@ def test_serve_limits_must_be_above_zero() -> None:
     for flag in ("--ttl", "--max-rooms", "--max-ip-connections", "--max-message"):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["serve", flag, "0"])
+    for text in ("-1", "nan", "inf"):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["serve", "--ttl", text])
     args = build_parser().parse_args(["serve", "--ttl", "0.5", "--max-rooms", "3"])
     assert (args.ttl, args.max_rooms) == (0.5, 3)

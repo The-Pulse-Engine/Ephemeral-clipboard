@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import math
 import sys
 from collections.abc import Callable, Sequence
 from typing import TypeVar
@@ -13,8 +14,9 @@ T = TypeVar("T", int, float)
 def _positive(kind: Callable[[str], T]) -> Callable[[str], T]:
     def parse(text: str) -> T:
         value = kind(text)
-        if value <= 0:
-            raise argparse.ArgumentTypeError(f"must be above zero, got {text}")
+        # isfinite refuses nan (which passes "<= 0") and inf (which turns the limit off)
+        if not (math.isfinite(value) and value > 0):
+            raise argparse.ArgumentTypeError(f"must be a finite number above zero, got {text}")
         return value
 
     return parse
