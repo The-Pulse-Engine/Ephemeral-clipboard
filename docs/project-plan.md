@@ -108,11 +108,11 @@ Three weeks, one milestone each week. Each week ends with a working, tagged buil
 
 ### Week 1: Protocol and relay (`v0.1.0`)
 
-- [ ] Repo setup: `pyproject.toml`, MIT license, CI (lint, type check, tests) for Windows and Linux
-- [ ] Write `docs/PROTOCOL.md`: message types, state machine, version field, error codes
-- [ ] Relay: nameplates, rooms, message forwarding, delete after delivery
-- [ ] Relay: TTL reaper, payload and room limits, per-IP rate limit
-- [ ] Tests: one read only, TTL expiry, limits
+- [x] Repo setup: `pyproject.toml`, MIT license, CI (lint, type check, tests) for Windows and Linux
+- [x] Write `docs/PROTOCOL.md`: message types, state machine, version field, error codes
+- [x] Relay: nameplates, rooms, message forwarding, delete after delivery
+- [x] Relay: TTL, payload and room limits, cap on connections per IP (#7)
+- [x] Tests: one read only, TTL expiry, limits
 
 ### Week 2: Client and crypto (`v0.2.0`)
 
@@ -154,12 +154,12 @@ ephemeral-clipboard/
 ├── pyproject.toml
 ├── src/eclip/
 │   ├── cli.py              # send, receive, serve
-│   ├── protocol.py         # message types, parser, state machine
+│   ├── protocol.py         # version, error codes, message parser
 │   ├── pake.py             # SPAKE2, HKDF, key confirmation
 │   ├── crypto.py           # ChaCha20-Poly1305
 │   ├── secure_mem.py       # SecureBuffer (mlock / VirtualLock + zeroing)
 │   ├── wordlist.py         # code words
-│   ├── relay.py            # asyncio WebSocket relay, TTL reaper, limits
+│   ├── relay.py            # asyncio WebSocket relay, TTL, limits
 │   └── clipboard/
 │       ├── windows.py      # Win32 via ctypes, history exclusion
 │       └── linux.py        # wl-copy / xclip, KDE hint
