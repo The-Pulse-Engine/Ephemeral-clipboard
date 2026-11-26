@@ -2,23 +2,31 @@ import asyncio
 import contextlib
 import json
 import secrets
-import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import websockets
-from websockets.asyncio.server import ServerConnection
+from websockets.asyncio.server import Server, ServerConnection
+
+from . import protocol
+from .protocol import Error
 
 
 @dataclass
 class Room:
     sender: ServerConnection
     receiver: ServerConnection | None = None
-    created: float = field(default_factory=time.monotonic)
 
 
-async def _error(websocket: ServerConnection, error: str) -> None:
-    await websocket.send(json.dumps({"type": "error", "error": error}))
+async def _error(websocket: ServerConnection, code: Error) -> None:
+    await websocket.send(protocol.error(code))
+
+
+async def _end(websocket: ServerConnection, code: Error | None) -> None:
+    if code is not None:
+        with contextlib.suppress(websockets.ConnectionClosed):
+            await _error(websocket, code)
+    await websocket.close(code=1000, reason=code or "room deleted")
 
 
 class Relay:
@@ -27,7 +35,7 @@ class Relay:
         ttl: float = 300,
         max_rooms: int = 1000,
         max_ip_connections: int = 20,
-        max_message: int = 64 * 1024,
+        max_message: int = protocol.MAX_MESSAGE,
     ) -> None:
         self.ttl = ttl
         self.max_rooms = max_rooms
@@ -39,10 +47,11 @@ class Relay:
 
     def _claim_nameplate(self) -> str | None:
         # Nameplates are 1..max_rooms, so a full nameplate space is the room cap.
+        # shortcut: scans every nameplate per claim, fine to ~100k rooms; sample first above that.
         free = [str(n) for n in range(1, self.max_rooms + 1) if str(n) not in self.rooms]
         return secrets.choice(free) if free else None
 
-    async def _close_room(self, nameplate: str, error: str | None = None) -> None:
+    async def _close_room(self, nameplate: str, code: Error | None = None) -> None:
         room = self.rooms.pop(nameplate, None)
         if room is None:
             return
@@ -50,22 +59,15 @@ class Relay:
         members = [room.sender] if room.receiver is None else [room.sender, room.receiver]
         for member in members:
             self.connections.pop(member, None)
-        for member in members:
-            if error is not None:
-                with contextlib.suppress(websockets.ConnectionClosed):
-                    await _error(member, error)
-            await member.close(code=1000, reason="room deleted")
+        # Shielded so a lifetime timeout cannot leave the other member open after the pop.
+        await asyncio.shield(asyncio.gather(*(_end(member, code) for member in members)))
 
-    async def close(self, websocket: ServerConnection) -> None:
+    async def close(self, websocket: ServerConnection, code: Error | None = None) -> None:
         nameplate = self.connections.pop(websocket, None)
         if nameplate is not None:
-            await self._close_room(nameplate)
-
-    async def reap_expired(self) -> None:
-        now = time.monotonic()
-        expired = [n for n, room in self.rooms.items() if now - room.created >= self.ttl]
-        # Close in parallel so one peer that ignores the close frame cannot stall the rest.
-        await asyncio.gather(*(self._close_room(n, "expired") for n in expired))
+            await self._close_room(nameplate, code)
+        elif code is not None:
+            await _end(websocket, code)
 
     async def handler(self, websocket: ServerConnection) -> None:
         # shortcut: counts the socket address, so behind a reverse proxy every client
@@ -73,13 +75,17 @@ class Relay:
         ip = str(websocket.remote_address[0])
         if self.ip_connections[ip] >= self.max_ip_connections:
             with contextlib.suppress(websockets.ConnectionClosed):
-                await _error(websocket, "too many connections")
+                await _error(websocket, Error.TOO_MANY_CONNECTIONS)
             return
 
         self.ip_connections[ip] += 1
         try:
-            async for raw in websocket:
-                await self._dispatch(websocket, raw)
+            # The TTL bounds every connection, so idle ones and their rooms both expire.
+            async with asyncio.timeout(self.ttl):
+                async for raw in websocket:
+                    await self._dispatch(websocket, raw)
+        except TimeoutError:
+            await self.close(websocket, Error.EXPIRED)
         except websockets.ConnectionClosed:
             pass  # a client that drops mid-exchange is normal, not a relay error
         finally:
@@ -89,34 +95,22 @@ class Relay:
             await self.close(websocket)
 
     async def _dispatch(self, websocket: ServerConnection, raw: str | bytes) -> None:
-        # Length in characters for text frames; clients send ASCII JSON, so this is bytes.
-        if len(raw) > self.max_message:
-            await _error(websocket, "message too large")
-            return
-        try:
-            message = json.loads(raw)
-        # ValueError covers bad UTF-8 and huge ints, RecursionError deep nesting
-        except (ValueError, RecursionError):
-            await _error(websocket, "invalid json")
-            return
-        if not isinstance(message, dict):
-            await _error(websocket, "invalid message")
+        message = protocol.parse(raw)
+        if isinstance(message, Error):
+            await _error(websocket, message)
             return
 
-        action = message.get("action")
+        action = message["action"]
         nameplate = message.get("nameplate")
-        if not isinstance(action, str) or not isinstance(nameplate, str | None):
-            await _error(websocket, "invalid message")
-            return
 
         if action in ("claim", "join") and websocket in self.connections:
-            await _error(websocket, "already in room")
+            await _error(websocket, Error.ALREADY_IN_ROOM)
             return
 
         if action == "claim":
             nameplate = self._claim_nameplate()
             if nameplate is None:
-                await _error(websocket, "relay full")
+                await _error(websocket, Error.RELAY_FULL)
                 return
             self.rooms[nameplate] = Room(sender=websocket)
             self.connections[websocket] = nameplate
@@ -126,10 +120,10 @@ class Relay:
         if action == "join":
             joined_room = self.rooms.get(nameplate) if nameplate else None
             if nameplate is None or joined_room is None:
-                await _error(websocket, "room not found")
+                await _error(websocket, Error.ROOM_NOT_FOUND)
                 return
             if joined_room.receiver is not None:
-                await _error(websocket, "room full")
+                await _error(websocket, Error.ROOM_FULL)
                 return
 
             joined_room.receiver = websocket
@@ -141,13 +135,13 @@ class Relay:
         if action == "message":
             member_nameplate = self.connections.get(websocket)
             if member_nameplate is None or nameplate not in (None, member_nameplate):
-                await _error(websocket, "not in room")
+                await _error(websocket, Error.NOT_IN_ROOM)
                 return
 
             room = self.rooms[member_nameplate]
             target = room.receiver if websocket is room.sender else room.sender
             if target is None:
-                await _error(websocket, "no receiver yet")
+                await _error(websocket, Error.NO_RECEIVER_YET)
                 return
 
             await target.send(
@@ -164,12 +158,14 @@ class Relay:
                 await self._close_room(member_nameplate)
             return
 
-        await _error(websocket, "unknown action")
+        await _error(websocket, Error.UNKNOWN_ACTION)
+
+
+def listen(relay: Relay, host: str, port: int) -> Server:
+    # max_size makes websockets refuse big frames before it buffers them (close code 1009).
+    return websockets.serve(relay.handler, host, port, max_size=relay.max_message)
 
 
 async def serve(host: str = "0.0.0.0", port: int = 8765, relay: Relay | None = None) -> None:
-    relay = relay or Relay()
-    async with websockets.serve(relay.handler, host, port):
-        while True:
-            await asyncio.sleep(1)
-            await relay.reap_expired()
+    async with listen(relay or Relay(), host, port):
+        await asyncio.Future()
