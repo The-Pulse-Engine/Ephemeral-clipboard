@@ -5,6 +5,10 @@
 <h1 align="center">Ephemeral Clipboard</h1>
 
 <p align="center">
+  <img src="assets/demo.gif" alt="A demo of sending and receiving a value with Ephemeral Clipboard" width="720">
+</p>
+
+<p align="center">
   Send a secret from one computer to another. Read once, then gone.<br>
   End-to-end encrypted. The relay never sees your data.
 </p>
@@ -18,7 +22,7 @@
 
 ---
 
-> **Status:** In development. The commands and features below are the planned design for `v1.0.0`. See [`docs/project-plan.md`](docs/project-plan.md).
+> **Status:** In development. See [`docs/project-plan.md`](docs/project-plan.md).
 
 ## Why
 
@@ -26,7 +30,7 @@ You need a password or an API key on another computer. Chat apps and email keep 
 
 Ephemeral Clipboard sends the secret once, encrypted from end to end, and then deletes it everywhere it can.
 
-## How to use it (planned)
+## How to use it
 
 On the first computer:
 
@@ -73,7 +77,7 @@ sequenceDiagram
 
 The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-## Install (planned)
+## Install
 
 ```sh
 pipx install ephemeral-clipboard
@@ -83,7 +87,7 @@ Or download a binary from GitHub Releases.
 
 **Linux:** install `wl-clipboard` (Wayland) or `xclip` (X11).
 
-## Commands (planned)
+## Commands
 
 | Command | Description |
 | --- | --- |
